@@ -4,10 +4,13 @@ import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.io.StringReader;
 import java.io.StringWriter;
+import java.io.Writer;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLConnection;
@@ -20,6 +23,7 @@ import javax.xml.bind.JAXBContext;
 import javax.xml.bind.JAXBException;
 import javax.xml.bind.Marshaller;
 import javax.xml.bind.Unmarshaller;
+import javax.xml.stream.XMLStreamWriter;
 import javax.xml.transform.OutputKeys;
 import javax.xml.transform.Source;
 import javax.xml.transform.Transformer;
@@ -28,9 +32,13 @@ import javax.xml.transform.sax.SAXTransformerFactory;
 import javax.xml.transform.stream.StreamResult;
 import javax.xml.transform.stream.StreamSource;
 
+import org.xml.sax.InputSource;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+
 import ols.tsg.api.client.TransactionRequest;
 
-import org.xml.sax.InputSource;
 
 public class TSGClient {
 
@@ -39,9 +47,10 @@ public class TSGClient {
      */
     public static void main(String[] args) {
         //Settings 
-        String APIURL = "";
-        String APIKEY = "";
+        String APIURL = "https://sandbox.thesecuregateway.com/rest/v1/transactions";
+        String APIKEY = "fc594b6c6fd4493db932d7ae50f8c56e";
         int TIMEOUT = 15000; //Milliseconds
+        String LANG_TYPE = "json"; //"xml" or "json"
 
         //Transaction info
         TransactionRequest transaction_request = new TransactionRequest();
@@ -86,14 +95,25 @@ public class TSGClient {
         transaction_request.shipping.country = "USA";
         transaction_request.shipping.phone = "123456789";
         
-        String xml_request = marshalJAXBObjectToXml(TransactionRequest.class,transaction_request);
+        String request;
+        if("xml".equals(LANG_TYPE)){ //if XML is chosen, build a XML formatted transaction 
+        	request = marshalJAXBObjectToXml(TransactionRequest.class,transaction_request);
+        }else{ //if JSON is chosen, build a JSON formatted transaction 
+        	//Server doesn't process next fields for JSON requests, so they are excluded from the request
+        	transaction_request.avs_address=null;
+        	transaction_request.avs_zip=null;
+        	
+        	Gson gson = new Gson();
+        	request = gson.toJson(transaction_request);
+        }   
         
         try  
         {
+        	          
             //Execute request to gateway
             System.out.println("-----------------------------------------------------");
             System.out.println("REQUEST TO URL: " + APIURL);
-            System.out.println("POST DATA: \n" + xml_request);
+            System.out.println("POST DATA: \n" + request);
             
             //Trust All certificates
             trustAllSSL();
@@ -106,45 +126,34 @@ public class TSGClient {
             conn.setConnectTimeout(TIMEOUT);
             conn.setReadTimeout(TIMEOUT);
             conn.setRequestMethod("POST");  
-            conn.setRequestProperty("Content-type", "application/xml");          
+            conn.setRequestProperty("Content-type", "application/"+LANG_TYPE);          
             PrintWriter pw = new PrintWriter(conn.getOutputStream());  
-            pw.write(xml_request);  
+            pw.write(request);  
             pw.close();  
             BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream())); 
-            String xml_response = "";
+            String response = "";
             String inputLine;
             while ((inputLine = in.readLine()) != null) 
-                xml_response += inputLine;
+                response += inputLine;
             in.close();  
             
+      //formatting response
+            String formattedResponse;
+            if("xml".equals(LANG_TYPE)){ // if the chosen language was XML, then the server will respond back with XML
+            	formattedResponse = formatXml(response);   //Format string to xml indented         	
+            }else{   // if the chosen language was JSON, then the server will respond back with JSON
+            	formattedResponse = response;				//no need to format string to json indented
+            }     
+            
             System.out.println("-----------------------------------------------------");
-            System.out.println("RESPONSE DATA: \n" + formatXml(xml_response));
+            System.out.println("RESPONSE DATA: \n" + formattedResponse);
             
-            if (conn.getResponseCode() == 200 && xml_response.contains("<transaction>"))
-            {
-                TransactionResponse transaction_response = (TransactionResponse)unmarshalJAXBObjectToXml(TransactionResponse.class, xml_response);
-                
-                if (transaction_response.result_code != null && transaction_response.result_code.equals("0000"))
-                {
-                    System.out.println("-----------------------------------------------------");
-                    System.out.println("TRANSACTION APPROVED: " + transaction_response.authorization_code);
-                }
-                else
-                {
-                    String code = "";
-                    if (transaction_response.error_code != null)
-                        code = transaction_response.error_code;
-                    if (transaction_response.result_code != null)
-                        code = transaction_response.result_code;
-                    System.out.println("-----------------------------------------------------");
-                    System.out.println("TRANSACTION ERROR: Code=" + code + " Message=" + transaction_response.display_message);
-                }
-            }
-            else{
-                System.out.println("-----------------------------------------------------");
-                System.out.println("INVALID RESPONSE");
-            }
-            
+          //parse response according to its content
+            if("xml".equals(LANG_TYPE)){
+            	parseXMLResponse(conn, response);   //parse XML response          	
+            }else{ 
+            	parseJSONResponse(conn, response);	//parse JSON response
+            }         
         }catch (Exception e){  
             System.out.println("-----------------------------------------------------");
             System.out.println("EXCEPTION: " + e.getMessage());
@@ -224,4 +233,74 @@ public class TSGClient {
              return xml;
          }
     }
+    
+    //parse XML response according to its content
+    public static void parseXMLResponse(HttpsURLConnection conn, String xml_response){ 	
+    	try {
+			if (conn.getResponseCode() == 200 && xml_response.contains("<transaction>")) //http status 200
+			{
+			    TransactionResponse transaction_response = (TransactionResponse)unmarshalJAXBObjectToXml(TransactionResponse.class, xml_response);
+			    
+			    if (transaction_response.result_code != null && transaction_response.result_code.equals("0000"))
+			    {
+			        System.out.println("-----------------------------------------------------");
+			        System.out.println("TRANSACTION APPROVED: " + transaction_response.authorization_code);
+			    }
+			    else
+			    {
+			        String code = "";
+			        if (transaction_response.error_code != null)
+			            code = transaction_response.error_code;
+			        if (transaction_response.result_code != null)
+			            code = transaction_response.result_code;
+			        System.out.println("-----------------------------------------------------");
+			        System.out.println("TRANSACTION ERROR: Code=" + code + " Message=" + transaction_response.display_message);
+			    }
+			}
+			else{
+			    System.out.println("-----------------------------------------------------");
+			    System.out.println("INVALID RESPONSE");
+			}
+		} catch (IOException e) {
+			System.out.println("-----------------------------------------------------");
+            System.out.println("EXCEPTION: " + e.getMessage());
+		}
+    	
+    }
+    
+   //parse JSON response according to its content
+    public static void parseJSONResponse(HttpsURLConnection conn, String json_response){ 	
+    	try {
+			if (conn.getResponseCode() == 200 && json_response.contains("transaction")) //http status 200
+			{
+				Gson gson = new Gson();
+			    TransactionResponse transaction_response = gson.fromJson(json_response, TransactionResponse.class);
+			    
+			    if (transaction_response.result_code != null && transaction_response.result_code.equals("0000"))
+			    {
+			        System.out.println("-----------------------------------------------------");
+			        System.out.println("TRANSACTION APPROVED: " + transaction_response.authorization_code);
+			    }
+			    else
+			    {
+			        String code = "";
+			        if (transaction_response.error_code != null)
+			            code = transaction_response.error_code;
+			        if (transaction_response.result_code != null)
+			            code = transaction_response.result_code;
+			        System.out.println("-----------------------------------------------------");
+			        System.out.println("TRANSACTION ERROR: Code=" + code + " Message=" + transaction_response.display_message);
+			    }
+			}
+			else{
+			    System.out.println("-----------------------------------------------------");
+			    System.out.println("INVALID RESPONSE");
+			}
+		} catch (IOException e) {
+			System.out.println("-----------------------------------------------------");
+            System.out.println("EXCEPTION: " + e.getMessage());
+		}
+    	
+    }
+   
 }

@@ -47,10 +47,10 @@ public class TSGClient {
      */
     public static void main(String[] args) {
         //Settings 
-        String APIURL = "https://sandbox.thesecuregateway.com/rest/v1/transactions";
-        String APIKEY = "fc594b6c6fd4493db932d7ae50f8c56e";
+        String APIURL = "";
+        String APIKEY = "";
         int TIMEOUT = 15000; //Milliseconds
-        String LANG_TYPE = "json"; //"xml" or "json"
+        String LANG_TYPE = ""; //"xml" or "json"
 
         //Transaction info
         TransactionRequest transaction_request = new TransactionRequest();
